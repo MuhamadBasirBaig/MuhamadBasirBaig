@@ -35,4 +35,3 @@ I am Basir Baig, I am a tech enthusiast & an open-source advocate. Always open t
 ![Raspberry Pi](https://img.shields.io/badge/-Raspberry%20Pi-C51A4A?style=flat-square&logo=Raspberry-Pi)
 
 
-<!-- ![Visitor Badge](https://visitor-badge.laobi.icu/badge?page_id=aemmadi.aemmadi) -->

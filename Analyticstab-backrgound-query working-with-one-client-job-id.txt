@@ -1,0 +1,457 @@
+/* eslint-disable max-lines */
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRecoilValue } from 'recoil';
+import { useGetReportStatus, useRunFunction } from 'queries';
+import { css, cx } from '@emotion/css';
+import { EuiFlexGroup, EuiFlexItem, EuiPanel, EuiPanelProps } from '@elastic/eui';
+import { SidebarPageLayout, Tree } from '@carecloud/ui-library/components';
+import { SidebarMenuCode, SidebarMenu } from './AnalyticsTab.constants';
+import { AppointmentsDashboard } from '../AppointmentsDashboard';
+import { TransactionsDashboard } from 'containers/TransactionsDashboard';
+import { SharedReportsGrid } from 'containers/SharedReportsGrid';
+import { MyReports } from '../MyReports';
+import { HistoryList } from 'containers/HistoryList';
+import { GenericDashboard } from 'containers/GenericDashboard';
+import { ApplicationTab } from '@carecloud/ui-library/types';
+import { AuthorizationsDashboard } from '../AuthorizationsDashboard';
+import { FormContainerView } from 'containers/FormContainerView';
+import { configurationAtom } from '@carecloud/atoms';
+import {
+  MAX_POLLING_ATTEMPTS,
+  POLLING_INTERVAL,
+  ReportCategoryCodes,
+  ReportStatus,
+} from '../../constants';
+import { ListItem, Menu } from './AnalyticsTab.types';
+import {
+  useConfiguration,
+  useFaultBox,
+  useHasCurrentUserRight,
+  useOpenNewBrowserTab,
+} from '@carecloud/ui-library/hooks';
+import { RightCode, ccTheme } from '@carecloud/ui-library/constants';
+import { AccountsReceivableDashboard } from 'containers/AccountsReceivableDashboard';
+import { useSession } from '@carecloud/ui-library/hooks';
+import { Requests } from 'containers/Requests';
+import { Claims } from 'containers/Claims';
+import { PatientsDashboard } from 'containers/PatientsDashboard';
+import { AdvancedAnalyticsHome } from 'containers/AdvancedAnalyticsHome';
+import { ReportsHome } from 'components';
+import axios from 'axios';
+
+export interface AnalyticsTabProps {
+  addTab: (newTab: ApplicationTab) => void;
+}
+
+export const AnalyticsTab: React.FC<AnalyticsTabProps> = React.memo(function AnalyticsTab({
+  addTab,
+}) {
+  const { userProfileId } = useSession();
+  const { assetsUrl } = useRecoilValue(configurationAtom);
+
+  const { data: domainCategoryList = [] } = useRunFunction({
+    functionName: `analytics.get_domain_category_list(${userProfileId})`,
+  });
+
+  const appointmentReportRights = useHasCurrentUserRight(RightCode.Appointments);
+  const transactionReportRights = useHasCurrentUserRight(RightCode.Transactions);
+  const acctReceivableReportRights = useHasCurrentUserRight(RightCode.AcctReceivable);
+  const patientReportRights = useHasCurrentUserRight(RightCode.Patients);
+  const authorizationReportRights = useHasCurrentUserRight(RightCode.Authorizations);
+  const claimsReportRights = useHasCurrentUserRight(RightCode.Claims);
+  const requestReportRights = useHasCurrentUserRight(RightCode.Requests);
+  const managementReportRights = useHasCurrentUserRight(RightCode.Management);
+  const clinicalReportRights = useHasCurrentUserRight(RightCode.Clinical);
+
+  const [activeMenu, setActiveMenu] = React.useState<Menu | undefined>();
+  const [isMenuOpen, setIsMenuOpen] = React.useState<Menu | undefined>();
+
+  const getLeafSelectable = useCallback(() => true, []);
+  const onMenuSelection = useCallback((menu) => setActiveMenu(menu), [setActiveMenu]);
+  const { userId, token } = useSession();
+
+  const [tracerInterval, setTracerInterval] = useState<number | false>(POLLING_INTERVAL);
+  const [clientReportJobIdList, setClientReportJobIdList] = useState<string | undefined>();
+  const { data: reportStatus } = useGetReportStatus(clientReportJobIdList, tracerInterval);
+  const { showFaultBox } = useFaultBox();
+  const pollingAttemptsRef = useRef(0);
+  const { dsUrl } = useConfiguration();
+  const openInNewTab = useOpenNewBrowserTab();
+
+  useEffect(() => {
+    if (clientReportJobIdList) setClientReportJobIdList(clientReportJobIdList);
+  }, [clientReportJobIdList]);
+
+  const onPollingEnd = useCallback(() => {
+    setTracerInterval(false);
+    setClientReportJobIdList(undefined);
+  }, [setTracerInterval, setClientReportJobIdList]);
+
+  useEffect(() => {
+    pollingAttemptsRef.current = 0;
+    if (reportStatus) {
+      setTracerInterval(POLLING_INTERVAL);
+    }
+  }, [reportStatus]);
+
+  const showReportFailedError = useCallback(() => {
+    setTracerInterval(false);
+    showFaultBox({ message: 'Report Could not be generated. please try again' });
+    setClientReportJobIdList(undefined);
+  }, [setTracerInterval, showFaultBox, setClientReportJobIdList]);
+
+  useEffect(() => {
+    const pollingAttempts = pollingAttemptsRef.current;
+
+    if (reportStatus?.statusCode === ReportStatus.Failed) {
+      showReportFailedError();
+    } else if (pollingAttempts >= MAX_POLLING_ATTEMPTS) {
+      onPollingEnd();
+    } else if (
+      reportStatus?.responseOut?.handler?.length &&
+      reportStatus?.statusCode === ReportStatus.Completed
+    ) {
+      onPollingEnd();
+    } else {
+      pollingAttemptsRef.current = pollingAttempts + 1;
+    }
+  }, [reportStatus?.responseOut?.handler, reportStatus?.statusCode, onPollingEnd]);
+
+  const onReportHandler = useCallback(async () => {
+    if (!reportStatus?.responseOut?.handler) return;
+    const { data } = await axios.get(`${dsUrl}/documents/${reportStatus?.responseOut?.handler}`, {
+      params: {
+        token,
+      },
+    });
+    const docUrl = data?.url;
+    openInNewTab(docUrl);
+    setClientReportJobIdList(undefined);
+  }, [token, dsUrl, openInNewTab, reportStatus, setClientReportJobIdList]);
+
+  useEffect(() => {
+    onReportHandler();
+  }, [onReportHandler]);
+
+  const onHomeMenuSelection = useCallback(
+    (menu) => {
+      setActiveMenu(menu);
+      setIsMenuOpen(undefined);
+    },
+    [setActiveMenu, setIsMenuOpen]
+  );
+
+  const onMenuCollapse = useCallback(
+    (item) => {
+      if (!item?.isCollapsible) return;
+      setIsMenuOpen(item);
+    },
+    [setIsMenuOpen]
+  );
+
+  const HomeMenu: SidebarMenu[] = useMemo(
+    () => [
+      {
+        id: SidebarMenuCode.ReportsHome,
+        name: 'Reports Home',
+        icon: `${assetsUrl}/icons/home.svg`,
+        iconSize: 's',
+        isSubReport: false,
+        isCollapsible: false,
+        items: [
+          {
+            id: SidebarMenuCode.MyReports,
+            name: 'My Reports',
+            isSubReport: false,
+            isCollapsible: false,
+          },
+          {
+            id: SidebarMenuCode.SharedWithMe,
+            name: 'Shared With Me',
+            isSubReport: false,
+            isCollapsible: false,
+          },
+          {
+            id: SidebarMenuCode.History,
+            name: 'History',
+            isSubReport: false,
+            isCollapsible: false,
+          },
+        ],
+      },
+    ],
+    [assetsUrl]
+  );
+
+  const AdvancedAnalyticsMenu: SidebarMenu[] = useMemo(
+    () => [
+      {
+        id: SidebarMenuCode.AdvancedAnalytics,
+        name: 'Advanced Analytics',
+        icon: `${assetsUrl}/icons/task-category-all.svg`,
+        isSubReport: false,
+        isCollapsible: false,
+      },
+    ],
+    [assetsUrl]
+  );
+
+  const subReportsIconList = useMemo(() => {
+    return {
+      Appointments: { path: 'calendar', size: 'm' },
+      Transactions: { path: `${assetsUrl}/icons/Financials.svg`, size: 'm' },
+      AcctReceivable: {
+        path: `${assetsUrl}/icons/task-category-collections.svg`,
+        size: 'm',
+      },
+      Authorizations: {
+        path: `${assetsUrl}/icons/task-category-authorization.svg`,
+        size: 'm',
+      },
+      Patients: { path: `${assetsUrl}/icons/Demographics.svg`, size: 'm' },
+      Claims: { path: `${assetsUrl}/icons/Bills.svg`, size: 'm' },
+      Requests: { path: 'importAction', size: 'm' },
+      Management: { path: `folderClosed`, size: 'm' },
+      Clinical: {
+        path: `${assetsUrl}/icons/task-category-clinical.svg`,
+        size: 'm',
+      },
+    };
+  }, [assetsUrl]);
+
+  const reportAcessRights = useMemo(() => {
+    return {
+      Appointments: appointmentReportRights,
+      Transactions: transactionReportRights,
+      AcctReceivable: acctReceivableReportRights,
+      Patients: patientReportRights,
+      Authorizations: authorizationReportRights,
+      Claims: claimsReportRights,
+      Requests: requestReportRights,
+      Management: managementReportRights,
+      Clinical: clinicalReportRights,
+    };
+  }, [
+    acctReceivableReportRights,
+    appointmentReportRights,
+    authorizationReportRights,
+    claimsReportRights,
+    managementReportRights,
+    patientReportRights,
+    requestReportRights,
+    transactionReportRights,
+    clinicalReportRights,
+  ]);
+
+  const SubreportsMenuGroups: SidebarMenu[] = useMemo(() => {
+    if (!domainCategoryList.length) return [];
+
+    let globalMenu: SidebarMenu[] = [];
+    Object.values(ReportCategoryCodes)?.map((code) => {
+      const report = domainCategoryList?.find((report) => report?.categoryCode === code);
+      if (!report || !reportAcessRights[report?.categoryName]) return;
+      globalMenu.push({
+        id: report?.categoryName,
+        name: report?.categoryLabel,
+        isSubReport: false,
+        isCollapsible: true,
+        icon: subReportsIconList[report?.categoryName]?.path,
+        iconSize: subReportsIconList[report?.categoryName]?.size,
+        items: report?.domainsList
+          ?.split(';')
+          ?.map((item) => item?.split(','))
+          ?.map((item) => {
+            return {
+              id: item?.[0],
+              name: item?.[1],
+              path: item?.[2],
+              isSubReport: true,
+              isCollapsible: false,
+            };
+          }),
+      });
+    });
+
+    return globalMenu;
+  }, [domainCategoryList, reportAcessRights, subReportsIconList]);
+
+  const reportCategoriesMap = React.useMemo(
+    () =>
+      domainCategoryList.reduce((categories, category) => {
+        const categoryCode = category?.categoryCode;
+        if (categoryCode) categories[categoryCode] = category;
+        return categories;
+      }, {}),
+    [domainCategoryList]
+  );
+
+  const content = useMemo(() => {
+    let content: React.ReactNode | null;
+    if (activeMenu?.isSubReport && activeMenu?.id)
+      return (
+        <FormContainerView
+          reportStylePayload={{
+            functionName: `analytics.get_report_list(${userId},${activeMenu?.id})`,
+            dataSource: '',
+          }}
+          addTab={addTab}
+          setClientReportJobIdList={setClientReportJobIdList}
+        />
+      );
+
+    switch (activeMenu?.id) {
+      case SidebarMenuCode.ReportsHome:
+        content = <ReportsHome />;
+        break;
+      case SidebarMenuCode.MyReports:
+        content = <MyReports />;
+        break;
+      case SidebarMenuCode.SharedWithMe:
+        content = <SharedReportsGrid addTab={addTab} />;
+        break;
+      case SidebarMenuCode.History:
+        content = <HistoryList />;
+        break;
+      case SidebarMenuCode.AdvancedAnalytics:
+        content = <AdvancedAnalyticsHome addTab={addTab} />;
+        break;
+      case SidebarMenuCode.Appointments:
+        const appointmentsCategory = reportCategoriesMap[ReportCategoryCodes.Appointments];
+        content = <AppointmentsDashboard reportCategory={appointmentsCategory} />;
+        break;
+      case SidebarMenuCode.AcctReceivable:
+        const accountsReceivableCategory = reportCategoriesMap[ReportCategoryCodes.AcctReceivable];
+        content = <AccountsReceivableDashboard reportCategory={accountsReceivableCategory} />;
+        break;
+      case SidebarMenuCode.Transactions:
+        const transactionsCategory = reportCategoriesMap[ReportCategoryCodes.Transactions];
+        content = <TransactionsDashboard reportCategory={transactionsCategory} />;
+        break;
+      case SidebarMenuCode.Management:
+        content = <GenericDashboard title="Management Dashboard" />;
+        break;
+      case SidebarMenuCode.Requests:
+        const requestsCategory = reportCategoriesMap[ReportCategoryCodes.Requests];
+        content = <Requests reportCategory={requestsCategory} />;
+        break;
+      case SidebarMenuCode.Claims:
+        const claimsCategory = reportCategoriesMap[ReportCategoryCodes.Claims];
+        content = <Claims reportCategory={claimsCategory} />;
+        break;
+      case SidebarMenuCode.Authorizations:
+        const authorizationsCategory = reportCategoriesMap[ReportCategoryCodes.Authorizations];
+        content = <AuthorizationsDashboard reportCategory={authorizationsCategory} />;
+        break;
+      case SidebarMenuCode.Patients:
+        const patientsCategory = reportCategoriesMap[ReportCategoryCodes.Patients];
+        content = <PatientsDashboard reportCategory={patientsCategory} />;
+        break;
+      case SidebarMenuCode.Clinical:
+        content = <GenericDashboard title="Clinical Dashboard" />;
+        break;
+      default:
+        content = <ReportsHome />;
+        break;
+    }
+    return content;
+  }, [activeMenu, addTab, reportCategoriesMap, userId]);
+
+  const selectedMenu = useMemo(() => {
+    const homeMenuList = HomeMenu?.reduce((acc, val) => {
+      acc = [...acc, { id: val.id, name: val.name }];
+      if (val?.items?.length) acc = [...acc, ...val?.items];
+      return acc;
+    }, [] as ListItem[]);
+
+    const subReportsMenuList = SubreportsMenuGroups?.reduce((acc, val) => {
+      acc = [...acc, { id: val.id, name: val.name }];
+      if (val?.items?.length) acc = [...acc, ...val?.items];
+      return acc;
+    }, [] as ListItem[]);
+
+    return [...subReportsMenuList, ...homeMenuList, ...AdvancedAnalyticsMenu].find(
+      ({ id }) => id === activeMenu?.id
+    );
+  }, [SubreportsMenuGroups, activeMenu, HomeMenu, AdvancedAnalyticsMenu]);
+
+  const openedHeader = useMemo(
+    () => SubreportsMenuGroups?.find(({ id }) => id === isMenuOpen?.id),
+    [SubreportsMenuGroups, isMenuOpen]
+  );
+
+  return (
+    <SidebarPageLayout
+      renderSidebar={() => (
+        <CustomPanel color="primary" dataCy="sidebar">
+          <EuiFlexGroup direction="column" gutterSize="s">
+            <EuiFlexItem>
+              <CustomPanel>
+                <Tree
+                  items={HomeMenu}
+                  onSelect={onHomeMenuSelection}
+                  selected={selectedMenu}
+                  getLeafSelectable={getLeafSelectable}
+                />
+              </CustomPanel>
+            </EuiFlexItem>
+            <EuiFlexItem>
+              <CustomPanel>
+                <Tree
+                  items={AdvancedAnalyticsMenu}
+                  onSelect={onHomeMenuSelection}
+                  selected={selectedMenu}
+                  getLeafSelectable={getLeafSelectable}
+                />
+              </CustomPanel>
+            </EuiFlexItem>
+            <EuiFlexItem>
+              <CustomPanel>
+                <Tree
+                  items={SubreportsMenuGroups}
+                  onSelect={onMenuSelection}
+                  getLeafSelectable={getLeafSelectable}
+                  selected={selectedMenu}
+                  isMenuCollapsible={true}
+                  openedMenu={openedHeader}
+                  onCollapse={onMenuCollapse}
+                />
+              </CustomPanel>
+            </EuiFlexItem>
+          </EuiFlexGroup>
+        </CustomPanel>
+      )}
+    >
+      <EuiPanel hasShadow={false} borderRadius="none" paddingSize="none" className="eui-yScroll">
+        {content}
+      </EuiPanel>
+    </SidebarPageLayout>
+  );
+});
+
+export interface CustomPanelProps {
+  color?: EuiPanelProps['color'];
+  dataCy?: string;
+}
+
+export const CustomPanel: React.FC<CustomPanelProps> = React.memo(function CustomPanel({
+  color,
+  dataCy,
+  children,
+}) {
+  return (
+    <EuiPanel
+      hasShadow={false}
+      color={color}
+      paddingSize="s"
+      className={cx(
+        'eui-yScroll',
+        css({
+          border: ccTheme.borders.solidBlue,
+        })
+      )}
+      data-cy={dataCy}
+    >
+      {children}
+    </EuiPanel>
+  );
+});
